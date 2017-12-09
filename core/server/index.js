@@ -14,22 +14,25 @@ require('./overrides');
 
 // Module dependencies
 var debug = require('ghost-ignition').debug('boot:init'),
-// Config should be first require, as it triggers the initial load of the config files
     config = require('./config'),
     Promise = require('bluebird'),
     i18n = require('./i18n'),
     models = require('./models'),
     permissions = require('./permissions'),
-    apps = require('./apps'),
     auth = require('./auth'),
     dbHealth = require('./data/db/health'),
-    xmlrpc = require('./data/xml/xmlrpc'),
-    slack = require('./data/slack'),
     GhostServer = require('./ghost-server'),
     scheduling = require('./adapters/scheduling'),
     settings = require('./settings'),
     themes = require('./themes'),
-    utils = require('./utils');
+    utils = require('./utils'),
+
+    // Services that need initialisation
+    urlService = require('./services/url'),
+    apps = require('./services/apps'),
+    xmlrpc = require('./services/xmlrpc'),
+    slack = require('./services/slack'),
+    webhooks = require('./services/webhooks');
 
 // ## Initialise Ghost
 function init() {
@@ -61,13 +64,17 @@ function init() {
             // Initialize xmrpc ping
             xmlrpc.listen(),
             // Initialize slack ping
-            slack.listen()
+            slack.listen(),
+            // Initialize webhook pings
+            webhooks.listen(),
+            // Url Service
+            urlService.init()
         );
     }).then(function () {
         debug('Apps, XMLRPC, Slack done');
 
         // Setup our collection of express apps
-        parentApp = require('./app')();
+        parentApp = require('./web/parent-app')();
 
         // Initialise analytics events
         if (config.get('segment:key')) {

@@ -1,5 +1,3 @@
-// jscs:disable requireMultipleVarDecl
-
 'use strict';
 
 // # Local File System Image Storage module
@@ -9,14 +7,15 @@ var serveStatic = require('express').static,
     fs = require('fs-extra'),
     path = require('path'),
     Promise = require('bluebird'),
+    moment = require('moment'),
     config = require('../../config'),
     errors = require('../../errors'),
     i18n = require('../../i18n'),
     utils = require('../../utils'),
+    logging = require('../../logging'),
     StorageBase = require('ghost-storage-base');
 
 class LocalFileStore extends StorageBase {
-
     constructor() {
         super();
 
@@ -81,7 +80,18 @@ class LocalFileStore extends StorageBase {
         var self = this;
 
         return function serveStaticContent(req, res, next) {
-            return serveStatic(self.storagePath, {maxAge: utils.ONE_YEAR_MS, fallthrough: false})(req, res, function (err) {
+            var startedAtMoment = moment();
+
+            return serveStatic(
+                self.storagePath,
+                {
+                    maxAge: utils.ONE_YEAR_MS,
+                    fallthrough: false,
+                    onEnd: function onEnd() {
+                        logging.info('LocalFileStorage.serve', req.path, moment().diff(startedAtMoment, 'ms') + 'ms');
+                    }
+                }
+            )(req, res, function (err) {
                 if (err) {
                     if (err.statusCode === 404) {
                         return next(new errors.NotFoundError({
@@ -124,9 +134,16 @@ class LocalFileStore extends StorageBase {
         return new Promise(function (resolve, reject) {
             fs.readFile(targetPath, function (err, bytes) {
                 if (err) {
+                    if (err.code === 'ENOENT') {
+                        return reject(new errors.NotFoundError({
+                            err: err,
+                            message: i18n.t('errors.errors.imageNotFoundWithRef', {img: options.path})
+                        }));
+                    }
+
                     return reject(new errors.GhostError({
                         err: err,
-                        message: 'Could not read image: ' + targetPath
+                        message: i18n.t('errors.errors.cannotReadImage', {img: options.path})
                     }));
                 }
 

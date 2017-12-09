@@ -14,9 +14,6 @@
         "rotation": {
             "enabled": true
         },
-        "transports": [
-            "file",
-            "stdout"
-        ]
+        "transports": ["file", "stdout"]
     }
 }

@@ -27,10 +27,6 @@ var _              = require('lodash'),
     User,
     Users;
 
-function validatePasswordLength(password) {
-    return validator.isLength(password, 8);
-}
-
 /**
  * generate a random salt and then hash the password with that salt
  */
@@ -106,7 +102,8 @@ User = ghostBookshelf.Model.extend({
      */
     onSaving: function onSaving(newPage, attr, options) {
         var self = this,
-            tasks = [];
+            tasks = [],
+            passwordValidation = {};
 
         ghostBookshelf.Model.prototype.onSaving.apply(this, arguments);
 
@@ -146,17 +143,36 @@ User = ghostBookshelf.Model.extend({
          * Important:
          *   - Password hashing happens when we import a database
          *   - we do some pre-validation checks, because onValidate is called AFTER onSaving
+         *   - when importing, we set the password to a random uid and don't validate, just hash it and lock the user
+         *   - when importing with `importPersistUser` we check if the password is a bcrypt hash already and fall back to
+         *     normal behaviour if not (set random password, lock user, and hash password)
+         *   - no validations should run, when importing
          */
         if (self.isNew() || self.hasChanged('password')) {
             this.set('password', String(this.get('password')));
 
-            if (!validatePasswordLength(this.get('password'))) {
-                return Promise.reject(new errors.ValidationError({message: i18n.t('errors.models.user.passwordDoesNotComplyLength')}));
+            // CASE: import with `importPersistUser` should always be an bcrypt password already,
+            // and won't re-hash or overwrite it.
+            // In case the password is not bcrypt hashed we fall back to the standard behaviour.
+            if (options.importPersistUser && this.get('password').match(/^\$2[ayb]\$.{56}$/i)) {
+                return;
             }
 
-            // An import with importOptions supplied can prevent re-hashing a user password
-            if (options.importPersistUser) {
-                return;
+            if (options.importing) {
+                // always set password to a random uid when importing
+                this.set('password', utils.uid(50));
+
+                // lock users so they have to follow the password reset flow
+                if (this.get('status') !== 'inactive') {
+                    this.set('status', 'locked');
+                }
+            } else {
+                // CASE: we're not importing data, run the validations
+                passwordValidation = validation.validatePassword(this.get('password'), this.get('email'));
+
+                if (!passwordValidation.isValid) {
+                    return Promise.reject(new errors.ValidationError({message: passwordValidation.message}));
+                }
             }
 
             tasks.hashPassword = (function hashPassword() {
@@ -220,8 +236,9 @@ User = ghostBookshelf.Model.extend({
     format: function format(options) {
         if (!_.isEmpty(options.website) &&
             !validator.isURL(options.website, {
-            require_protocol: true,
-            protocols: ['http', 'https']})) {
+                require_protocol: true,
+                protocols: ['http', 'https']
+            })) {
             options.website = 'http://' + options.website;
         }
         return ghostBookshelf.Model.prototype.format.call(this, options);
@@ -546,17 +563,20 @@ User = ghostBookshelf.Model.extend({
      */
     setup: function setup(data, options) {
         var self = this,
-            userData = this.filterData(data);
+            userData = this.filterData(data),
+            passwordValidation = {};
 
-        if (!validatePasswordLength(userData.password)) {
-            return Promise.reject(new errors.ValidationError({message: i18n.t('errors.models.user.passwordDoesNotComplyLength')}));
+        passwordValidation = validation.validatePassword(userData.password, userData.email, data.blogTitle);
+
+        if (!passwordValidation.isValid) {
+            return Promise.reject(new errors.ValidationError({message: passwordValidation.message}));
         }
 
         options = this.filterOptions(options, 'setup');
         options.withRelated = _.union(options.withRelated, options.include);
 
         userData.slug = null;
-        return self.edit.call(self, userData, options);
+        return self.edit(userData, options);
     },
 
     /**
@@ -773,41 +793,46 @@ User = ghostBookshelf.Model.extend({
         var ownerRole,
             contextUser;
 
-        return Promise.join(ghostBookshelf.model('Role').findOne({name: 'Owner'}),
-                            User.findOne({id: options.context.user}, {include: ['roles']}))
-        .then(function then(results) {
-            ownerRole = results[0];
-            contextUser = results[1];
+        return Promise.join(
+            ghostBookshelf.model('Role').findOne({name: 'Owner'}),
+            User.findOne({id: options.context.user}, {include: ['roles']})
+        )
+            .then(function then(results) {
+                ownerRole = results[0];
+                contextUser = results[1];
 
-            // check if user has the owner role
-            var currentRoles = contextUser.toJSON(options).roles;
-            if (!_.some(currentRoles, {id: ownerRole.id})) {
-                return Promise.reject(new errors.NoPermissionError({message: i18n.t('errors.models.user.onlyOwnerCanTransferOwnerRole')}));
-            }
+                // check if user has the owner role
+                var currentRoles = contextUser.toJSON(options).roles;
+                if (!_.some(currentRoles, {id: ownerRole.id})) {
+                    return Promise.reject(new errors.NoPermissionError({message: i18n.t('errors.models.user.onlyOwnerCanTransferOwnerRole')}));
+                }
 
-            return Promise.join(ghostBookshelf.model('Role').findOne({name: 'Administrator'}),
-                                User.findOne({id: object.id}, {include: ['roles']}));
-        }).then(function then(results) {
-            var adminRole = results[0],
-                user = results[1],
-                currentRoles = user.toJSON(options).roles;
+                return Promise.join(ghostBookshelf.model('Role').findOne({name: 'Administrator'}),
+                    User.findOne({id: object.id}, {include: ['roles']}));
+            })
+            .then(function then(results) {
+                var adminRole = results[0],
+                    user = results[1],
+                    currentRoles = user.toJSON(options).roles;
 
-            if (!_.some(currentRoles, {id: adminRole.id})) {
-                return Promise.reject(new errors.ValidationError({message: i18n.t('errors.models.user.onlyAdmCanBeAssignedOwnerRole')}));
-            }
+                if (!_.some(currentRoles, {id: adminRole.id})) {
+                    return Promise.reject(new errors.ValidationError({message: i18n.t('errors.models.user.onlyAdmCanBeAssignedOwnerRole')}));
+                }
 
-            // convert owner to admin
-            return Promise.join(contextUser.roles().updatePivot({role_id: adminRole.id}),
-                                user.roles().updatePivot({role_id: ownerRole.id}),
-                                user.id);
-        }).then(function then(results) {
-            return Users.forge()
-                .query('whereIn', 'id', [contextUser.id, results[2]])
-                .fetch({withRelated: ['roles']});
-        }).then(function then(users) {
-            options.include = ['roles'];
-            return users.toJSON(options);
-        });
+                // convert owner to admin
+                return Promise.join(contextUser.roles().updatePivot({role_id: adminRole.id}),
+                    user.roles().updatePivot({role_id: ownerRole.id}),
+                    user.id);
+            })
+            .then(function then(results) {
+                return Users.forge()
+                    .query('whereIn', 'id', [contextUser.id, results[2]])
+                    .fetch({withRelated: ['roles']});
+            })
+            .then(function then(users) {
+                options.include = ['roles'];
+                return users.toJSON(options);
+            });
     },
 
     // Get the user by email address, enforces case insensitivity rejects if the user is not found

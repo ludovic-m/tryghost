@@ -11,7 +11,7 @@ var Promise = require('bluebird'),
     events = require('../events'),
     i18n = require('../i18n'),
     logging = require('../logging'),
-    spamPrevention = require('../middleware/api/spam-prevention'),
+    spamPrevention = require('../web/middleware/api/spam-prevention'),
     mailAPI = require('./mail'),
     settingsAPI = require('./settings'),
     authentication,
@@ -321,8 +321,14 @@ authentication = {
                     updatedUser.set('status', 'active');
                     return updatedUser.save(options);
                 })
+                .catch(errors.ValidationError, function (err) {
+                    return Promise.reject(err);
+                })
                 .catch(function (err) {
-                    throw new errors.UnauthorizedError({err: err});
+                    if (errors.utils.isIgnitionError(err)) {
+                        return Promise.reject(err);
+                    }
+                    return Promise.reject(new errors.UnauthorizedError({err: err}));
                 });
         }
 
