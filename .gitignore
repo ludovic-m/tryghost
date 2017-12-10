@@ -39,7 +39,7 @@ Session.vim
 *.db
 *.db-journal
 
-.build
+#build
 .dist
 .tmp
 
