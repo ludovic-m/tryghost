@@ -1,3 +1,6 @@
+Updated to Ghost 1.18.4
+Thanks to Thiago Passos for the original work https://github.com/thiagospassos/tryghost
+
 # [TryGhost](https://github.com/TryGhost/Ghost) tweaked to work on Azure Web App
 I've used the version 1.10 downloaded from https://ghost.org/developers/ as a baseline for this project.
 You can either create your web app in the [Azure Portal](https://portal.azure.com) and configure continuous deployment to this repository or use this shiny button to deploy straight to your Azure subscription  
